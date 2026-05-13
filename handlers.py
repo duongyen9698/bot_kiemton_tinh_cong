@@ -28,6 +28,7 @@ DB_FILE = "db.json"
 
 # List of allowed users (IDs or usernames)
 ALLOWED_USERS = ["1655527971", "Jena882".lower()]
+ALLOWED_KIEMTON_COMMAND_USERS = ["1655527971", "Jena882", "5666233114", "8499875913".lower()]
 
 
 def is_user_allowed(user: Update) -> bool:
@@ -39,6 +40,22 @@ def is_user_allowed(user: Update) -> bool:
         return True
     return False
 
+def is_kiemton_command_user(user: Update) -> bool:
+    if (
+        str(user.effective_user.username).lower() in ALLOWED_KIEMTON_COMMAND_USERS
+        or str(user.effective_user.id).strip("@") in ALLOWED_KIEMTON_COMMAND_USERS
+    ):
+        return True
+    return False
+
+def restricted_kiemton_command(func):
+    """Decorator to restrict access to certain commands."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if is_kiemton_command_user(update):
+            await func(update, context, *args, **kwargs)
+        else:
+            await update.message.reply_text("You are not authorized to use this command.")
+    return wrapper
 
 def restricted(func):
     """Decorator to restrict access to certain commands."""
@@ -89,11 +106,12 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text="Pong!", parse_mode="HTML")
 
 
-@restricted
+# @restricted
 async def getchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
+    user_id = update.message.from_user.id
 
-    await update.message.reply_text(text="Chat ID: %s" % chat_id)
+    await update.message.reply_text(text=f"Chat ID: {chat_id}\nUser ID: {user_id}")
 
 
 @restricted
@@ -253,7 +271,8 @@ async def update_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text="Please input token")
 
 
-@restricted
+# @restricted
+@restricted_kiemton_command
 async def kiemton(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         kiotviet = Kiotviet()

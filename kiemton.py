@@ -1,10 +1,11 @@
 import asyncio
+import base64
 import json
 import logging
 import os
 import random
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import sleep
 
@@ -21,6 +22,7 @@ JWT = ""
 EXCEL_FOLDER = "excel"
 RESULT_FILE = "result.csv"
 LOG_FILE = "log.txt"
+TOKEN_WARNING_STATE_FILE = "token_warning.json"
 Path(EXCEL_FOLDER).mkdir(parents=True, exist_ok=True)
 
 load_dotenv()  # take environment variables from .env
@@ -30,8 +32,6 @@ TOKEN = env.get("TOKEN")
 CHAT_ID = env.get("CHAT_ID")
 
 PROXY = {
-    "http": f"http://dijxsbnf:zvewklzjmp5d@173.211.0.148:6641",
-    "https": f"http://dijxsbnf:zvewklzjmp5d@173.211.0.148:6641",
 }
 
 
@@ -66,6 +66,109 @@ def write_token(token):
 def write_log(msg):
     with open(LOG_FILE, "a") as f:
         print(msg, file=f)
+
+
+def _base64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+def parse_jwt_exp(token_str: str) -> datetime | None:
+    """
+    Best-effort decode JWT payload and return exp as UTC datetime.
+    Signature is NOT verified (we only need expiry info).
+    """
+    try:
+        parts = (token_str or "").strip().split(".")
+        if len(parts) < 2:
+            return None
+        payload_b64 = parts[1]
+        payload = json.loads(_base64url_decode(payload_b64).decode("utf-8"))
+        exp = payload.get("exp")
+        if exp is None:
+            return None
+        exp_int = int(exp)
+        return datetime.fromtimestamp(exp_int, tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def _load_token_warning_state() -> dict:
+    try:
+        return json.loads(Path(TOKEN_WARNING_STATE_FILE).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_token_warning_state(state: dict) -> None:
+    Path(TOKEN_WARNING_STATE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _today_str_hcm(now_utc: datetime | None = None) -> str:
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    return now_utc.astimezone(tz).strftime("%Y-%m-%d")
+
+
+def should_send_token_warning(today_str: str) -> bool:
+    state = _load_token_warning_state()
+    return state.get("last_warn_date") != today_str
+
+
+def mark_token_warning_sent(today_str: str) -> None:
+    state = _load_token_warning_state()
+    state["last_warn_date"] = today_str
+    _save_token_warning_state(state)
+
+
+def send_token_expiry_warning_if_needed() -> None:
+    """
+    Send a separate Telegram message when token expiry is within 3 days (or already expired),
+    deduped to at most once per day (Asia/Ho_Chi_Minh).
+    """
+    try:
+        token_str = read_token()
+        exp_dt_utc = parse_jwt_exp(token_str)
+        if not exp_dt_utc:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        seconds_left = (exp_dt_utc - now_utc).total_seconds()
+
+        threshold_seconds = timedelta(days=3).total_seconds()
+        if seconds_left > threshold_seconds:
+            return
+
+        today_str = _today_str_hcm(now_utc=now_utc)
+        if not should_send_token_warning(today_str=today_str):
+            return
+
+        tz = pytz.timezone("Asia/Ho_Chi_Minh")
+        exp_dt_hcm = exp_dt_utc.astimezone(tz)
+
+        if seconds_left >= 0:
+            days_left = seconds_left / 86400
+            msg = (
+                "⚠️ Cảnh báo: token KiotViet sắp hết hạn.\n"
+                f"- Hết hạn lúc: {exp_dt_hcm.strftime('%d-%m-%Y %H:%M:%S')} (Asia/Ho_Chi_Minh)\n"
+                f"- Còn khoảng: {days_left:.2f} ngày\n"
+                "Vui lòng cập nhật token sớm."
+            )
+        else:
+            msg = (
+                "⛔ Token KiotViet đã hết hạn.\n"
+                f"- Hết hạn lúc: {exp_dt_hcm.strftime('%d-%m-%Y %H:%M:%S')} (Asia/Ho_Chi_Minh)\n"
+                "Vui lòng cập nhật token."
+            )
+
+        send_message(msg=msg)
+        mark_token_warning_sent(today_str=today_str)
+    except Exception:
+        # Never break the job because of warning logic
+        return
 
 
 class Kiotviet:
@@ -238,6 +341,7 @@ class Kiotviet:
 
 
 if __name__ == "__main__":
+    send_token_expiry_warning_if_needed()
     error = "None"
     for _ in range(5):
         try:

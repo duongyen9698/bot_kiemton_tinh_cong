@@ -2,6 +2,7 @@
 examples
 venv
 token.txt
+token_warning.json
 kiemton_manual.py
 result.csv
 log.txt
