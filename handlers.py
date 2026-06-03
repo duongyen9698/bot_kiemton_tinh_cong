@@ -3,7 +3,6 @@ import json
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from time import sleep
 
 from dotenv import dotenv_values, load_dotenv
@@ -23,6 +22,8 @@ from telegram.ext import (
 )
 
 from kiemton import RESULT_FILE, Kiotviet, write_token
+from sapo.exc import SapoConfigError
+from sapo.pipeline import run_reconciliation_today
 
 DB_FILE = "db.json"
 
@@ -273,6 +274,30 @@ async def update_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # @restricted
 @restricted_kiemton_command
+async def sapo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        csv_path = await asyncio.to_thread(run_reconciliation_today)
+        with open(csv_path, "rb") as file:
+            await update.message.reply_document(
+                caption=f"Đối soát Sapo trong ngày: {datetime.now().strftime('%d-%m-%Y')}",
+                document=file,
+            )
+        work = csv_path.parent
+        for name in (
+            "inventory_reconciliation_today.csv",
+            "orders_today_limit_1000.json",
+            "products_all_pages_limit_250.json",
+        ):
+            p = work / name
+            if p.is_file():
+                os.remove(p)
+    except SapoConfigError as e:
+        await update.message.reply_text(f"Cấu hình Sapo: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Lỗi đối soát Sapo\n{e}")
+
+
+@restricted_kiemton_command
 async def kiemton(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         kiotviet = Kiotviet()
@@ -299,6 +324,7 @@ strategyPatterns = {
     "xoa": xoa,
     "tinh": tinh,
     "debug": debug,
+    "sapo": sapo,
     "kiemton": kiemton,
     "token": update_token,
 }

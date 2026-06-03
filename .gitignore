@@ -34,3 +34,5 @@ captcha.png
 db
 excel
 db.json
+sapo_work/
+sapo_cron.log
