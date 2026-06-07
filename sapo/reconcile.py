@@ -6,14 +6,13 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def to_float(value: object) -> float:
-    if value is None:
-        return float("inf")
-    return float(value)
-
-
 def _normalize_unit(unit: object) -> str:
     return str(unit or "").strip()
+
+
+def _order_sold_at(order: dict) -> str:
+    """Thời điểm bán trên order (ISO UTC), dùng processed_on."""
+    return str(order.get("processed_on") or order.get("created_on") or "")
 
 
 def reconcile_to_csv(
@@ -24,6 +23,7 @@ def reconcile_to_csv(
     """
     Gộp đơn hôm nay với catalog variant theo variant_id (fallback SKU); ghi CSV.
     Đơn vị bán lấy từ line_item trên hóa đơn; tồn kho lấy từ variant tương ứng.
+    Sắp xếp theo lần bán muộn nhất trong ngày (last_sold_at từ order.processed_on).
     Returns (matched_count, unmatched_count).
     """
     orders_list = orders.get("orders", [])
@@ -57,9 +57,11 @@ def reconcile_to_csv(
             "sku": "",
             "sold_name": "",
             "variant_id": None,
+            "last_sold_at": "",
         }
     )
     for order in orders_list:
+        sold_at = _order_sold_at(order)
         for line_item in order.get("line_items") or []:
             sku = line_item.get("sku")
             qty = float(line_item.get("quantity") or 0)
@@ -71,6 +73,8 @@ def reconcile_to_csv(
             bucket["sold_qty"] += qty
             bucket["sku"] = sku
             bucket["variant_id"] = variant_id
+            if sold_at and sold_at > bucket["last_sold_at"]:
+                bucket["last_sold_at"] = sold_at
             if not bucket["sold_unit"]:
                 bucket["sold_unit"] = _normalize_unit(line_item.get("unit"))
             if not bucket["sold_name"]:
@@ -97,6 +101,7 @@ def reconcile_to_csv(
                     "sold_name": row["sold_name"],
                     "sold_qty": row["sold_qty"],
                     "sold_unit": row["sold_unit"],
+                    "last_sold_at": row["last_sold_at"],
                 }
             )
             continue
@@ -109,12 +114,13 @@ def reconcile_to_csv(
                 "inventory_unit": variant["unit"],
                 "inventory_quantity": variant["inventory_quantity"],
                 "sold_qty": row["sold_qty"],
+                "last_sold_at": row["last_sold_at"],
             }
         )
 
-    matched_rows.sort(
-        key=lambda r: (to_float(r["inventory_quantity"]), r["product_name"], r["sku"])
-    )
+    sort_key = lambda r: (r["last_sold_at"], r.get("sku") or r.get("product_name") or "")
+    matched_rows.sort(key=sort_key)
+    unmatched_rows.sort(key=sort_key)
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     with output_csv.open("w", encoding="utf-8", newline="") as file:
