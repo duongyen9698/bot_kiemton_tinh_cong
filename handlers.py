@@ -285,7 +285,7 @@ async def sapo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         work = csv_path.parent
         for name in (
             "inventory_reconciliation_today.csv",
-            "orders_today_limit_1000.json",
+            "orders_today_limit_5000.json",
             "products_all_pages_limit_250.json",
         ):
             p = work / name

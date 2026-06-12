@@ -6,18 +6,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from sapo.config import PROJECT_ROOT, load_settings
-from sapo.exc import SapoAuthError
 from sapo.fetch_orders import fetch_orders_today_json
 from sapo.fetch_products import fetch_all_products
-from sapo.login import login_and_save_cookies
 from sapo.reconcile import reconcile_to_csv
-
-
-def _cookie_nonempty(settings) -> bool:
-    p = settings.cookie_file
-    if not p.is_file():
-        return False
-    return bool(p.read_text(encoding="utf-8").strip())
+from sapo.session import with_sapo_auth
 
 
 def run_reconciliation_today(
@@ -32,7 +24,7 @@ def run_reconciliation_today(
     settings = load_settings()
     settings.work_dir.mkdir(parents=True, exist_ok=True)
 
-    orders_path = settings.work_dir / "orders_today_limit_1000.json"
+    orders_path = settings.work_dir / "orders_today_limit_5000.json"
     products_path = settings.work_dir / "products_all_pages_limit_250.json"
     output_csv = settings.work_dir / "inventory_reconciliation_today.csv"
 
@@ -49,16 +41,12 @@ def run_reconciliation_today(
         )
         print(f"Đã ghi {products_path}")
 
-    if not _cookie_nonempty(settings):
-        print("Cookie Sapo trống hoặc chưa có — đăng nhập Playwright (Chromium)...")
-        login_and_save_cookies(settings, headed=headed, timeout_ms=timeout_ms)
-
-    try:
-        fetch_and_save()
-    except SapoAuthError:
-        print("Cookie hết hạn hoặc không hợp lệ — đăng nhập lại...")
-        login_and_save_cookies(settings, headed=headed, timeout_ms=timeout_ms)
-        fetch_and_save()
+    with_sapo_auth(
+        settings,
+        fetch_and_save,
+        headed=headed,
+        timeout_ms=timeout_ms,
+    )
 
     orders_data = json.loads(orders_path.read_text(encoding="utf-8"))
     products_data = json.loads(products_path.read_text(encoding="utf-8"))

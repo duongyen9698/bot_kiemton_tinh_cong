@@ -6,6 +6,8 @@ token_warning.json
 kiemton_manual.py
 result.csv
 log.txt
+*.err
+*.log
 
 .DS*
 log
