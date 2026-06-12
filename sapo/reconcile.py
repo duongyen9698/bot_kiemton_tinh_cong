@@ -128,30 +128,30 @@ def reconcile_to_csv(
         writer.writerow(
             [
                 "ten_san_pham",
-                "sku",
+                "ton_kho_con_lai",
                 "don_vi",
                 "so_luong_da_ban_hom_nay",
-                "ton_kho_con_lai",
+                "sku",
             ]
         )
         for row in matched_rows:
             writer.writerow(
                 [
                     row["product_name"],
-                    row["sku"],
+                    row["inventory_quantity"],
                     row["sold_unit"],
                     row["sold_qty"],
-                    row["inventory_quantity"],
+                    row["sku"],
                 ]
             )
         for row in unmatched_rows:
             writer.writerow(
                 [
                     row["sold_name"],
-                    row["sku"],
+                    "",
                     row["sold_unit"],
                     row["sold_qty"],
-                    "",
+                    row["sku"],
                 ]
             )
 
