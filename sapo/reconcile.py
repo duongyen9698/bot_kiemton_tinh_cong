@@ -21,7 +21,7 @@ def reconcile_to_csv(
     output_csv: Path,
 ) -> tuple[int, int]:
     """
-    Gộp đơn hôm nay với catalog variant theo variant_id (fallback SKU); ghi CSV.
+    Gộp đơn hôm nay với catalog variant theo variant_id; ghi CSV.
     Đơn vị bán lấy từ line_item trên hóa đơn; tồn kho lấy từ variant tương ứng.
     Sắp xếp theo lần bán muộn nhất trong ngày (last_sold_at từ order.processed_on).
     Returns (matched_count, unmatched_count).
@@ -30,31 +30,24 @@ def reconcile_to_csv(
     products = products_payload.get("products", [])
 
     variant_id_to_variant: dict[int, dict] = {}
-    sku_to_variant: dict[str, dict] = {}
     for product in products:
         product_name = product.get("name") or "(khong co ten)"
         for variant in product.get("variants") or []:
             variant_id = variant.get("id")
-            sku = variant.get("sku")
-            info = {
+            if not isinstance(variant_id, int):
+                continue
+            variant_id_to_variant[variant_id] = {
                 "product_name": product_name,
                 "unit": _normalize_unit(variant.get("unit")),
                 "inventory_quantity": variant.get("inventory_quantity"),
                 "variant_title": variant.get("title") or "",
-                "sku": sku or "",
                 "variant_id": variant_id,
             }
-            if isinstance(variant_id, int):
-                variant_id_to_variant[variant_id] = info
-            if sku:
-                sku_to_variant[sku] = info
 
-    SoldKey = int | str
-    sold: dict[SoldKey, dict] = defaultdict(
+    sold: dict[int, dict] = defaultdict(
         lambda: {
             "sold_qty": 0.0,
             "sold_unit": "",
-            "sku": "",
             "sold_name": "",
             "variant_id": None,
             "last_sold_at": "",
@@ -63,15 +56,12 @@ def reconcile_to_csv(
     for order in orders_list:
         sold_at = _order_sold_at(order)
         for line_item in order.get("line_items") or []:
-            sku = line_item.get("sku")
-            qty = float(line_item.get("quantity") or 0)
-            if not sku:
-                continue
             variant_id = line_item.get("variant_id")
-            key: SoldKey = variant_id if isinstance(variant_id, int) else f"sku:{sku}"
-            bucket = sold[key]
+            if not isinstance(variant_id, int):
+                continue
+            qty = float(line_item.get("quantity") or 0)
+            bucket = sold[variant_id]
             bucket["sold_qty"] += qty
-            bucket["sku"] = sku
             bucket["variant_id"] = variant_id
             if sold_at and sold_at > bucket["last_sold_at"]:
                 bucket["last_sold_at"] = sold_at
@@ -86,18 +76,13 @@ def reconcile_to_csv(
 
     matched_rows: list[dict] = []
     unmatched_rows: list[dict] = []
-    for key in sorted(sold, key=lambda k: (isinstance(k, str), k)):
-        row = sold[key]
-        variant = None
-        variant_id = row["variant_id"]
-        if isinstance(variant_id, int):
-            variant = variant_id_to_variant.get(variant_id)
-        if variant is None and row["sku"]:
-            variant = sku_to_variant.get(row["sku"])
+    for variant_id in sorted(sold):
+        row = sold[variant_id]
+        variant = variant_id_to_variant.get(variant_id)
         if variant is None:
             unmatched_rows.append(
                 {
-                    "sku": row["sku"],
+                    "variant_id": variant_id,
                     "sold_name": row["sold_name"],
                     "sold_qty": row["sold_qty"],
                     "sold_unit": row["sold_unit"],
@@ -108,7 +93,7 @@ def reconcile_to_csv(
         sold_unit = row["sold_unit"] or variant["unit"]
         matched_rows.append(
             {
-                "sku": row["sku"] or variant["sku"],
+                "variant_id": variant_id,
                 "product_name": variant["product_name"],
                 "sold_unit": sold_unit,
                 "inventory_unit": variant["unit"],
@@ -118,7 +103,11 @@ def reconcile_to_csv(
             }
         )
 
-    sort_key = lambda r: (r["last_sold_at"], r.get("sku") or r.get("product_name") or "")
+    sort_key = lambda r: (
+        r["last_sold_at"],
+        str(r.get("variant_id") or ""),
+        r.get("product_name") or r.get("sold_name") or "",
+    )
     matched_rows.sort(key=sort_key)
     unmatched_rows.sort(key=sort_key)
 
@@ -131,7 +120,7 @@ def reconcile_to_csv(
                 "ton_kho_con_lai",
                 "don_vi",
                 "so_luong_da_ban_hom_nay",
-                "sku",
+                "variant_id",
             ]
         )
         for row in matched_rows:
@@ -141,7 +130,7 @@ def reconcile_to_csv(
                     row["inventory_quantity"],
                     row["sold_unit"],
                     row["sold_qty"],
-                    row["sku"],
+                    row["variant_id"],
                 ]
             )
         for row in unmatched_rows:
@@ -151,7 +140,7 @@ def reconcile_to_csv(
                     "",
                     row["sold_unit"],
                     row["sold_qty"],
-                    row["sku"],
+                    row["variant_id"],
                 ]
             )
 
