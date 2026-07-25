@@ -52,41 +52,64 @@ def _cookies_for_header(cookies: list[dict]) -> str:
     return "; ".join(parts)
 
 
+def _username_selector(page) -> str:
+    """Sapo đổi #username → #phoneNumber (2026); giữ fallback form cũ."""
+    if page.locator("#phoneNumber").count():
+        return "#phoneNumber"
+    return "#username"
+
+
 def _fill_login_form(page, username: str, password: str, timeout_ms: int) -> None:
+    page.set_default_timeout(timeout_ms)
     try:
         page.wait_for_load_state("networkidle", timeout=min(20_000, timeout_ms))
     except PlaywrightTimeoutError:
         pass
 
-    page.wait_for_selector("#password", state="visible", timeout=timeout_ms)
+    user_sel = _username_selector(page)
+    page.wait_for_selector(f"{user_sel}, #password", state="visible", timeout=timeout_ms)
     time.sleep(0.5)
-    page.locator("#username").click()
-    page.locator("#username").fill(username)
+    page.locator(user_sel).click()
+    page.locator(user_sel).fill(username)
     page.locator("#password").click()
     page.locator("#password").fill(password)
+    user_id = user_sel.lstrip("#")
     page.evaluate(
         """
-        for (const id of ['username', 'password']) {
-            const el = document.getElementById(id);
-            if (!el) continue;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+        ([userId]) => {
+            for (const id of [userId, 'password']) {
+                const el = document.getElementById(id);
+                if (!el) continue;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            if (window.$) {
+                $(`#${userId}`).trigger('input').trigger('keyup');
+                $('#password').trigger('input').trigger('keyup');
+            }
         }
-        if (window.$) {
-            $('#username').trigger('input').trigger('keyup');
-            $('#password').trigger('input').trigger('keyup');
-        }
-        """
+        """,
+        user_id,
     )
     time.sleep(0.4)
 
 
-def _click_login_submit_js(page) -> None:
-    """Nút Đăng nhập Sapo hay disabled / height 0 trong headless — click bằng JS."""
+def _click_login_submit(page, timeout_ms: int) -> None:
+    """Nút Đăng nhập — form React mới hoặc pos-login-form cũ (headless hay disabled)."""
+    page.set_default_timeout(timeout_ms)
+    submit = page.get_by_role("button", name="Đăng nhập")
+    if submit.count():
+        btn = submit.first
+        if btn.is_disabled():
+            btn.evaluate("b => { b.removeAttribute('disabled'); b.click(); }")
+        else:
+            btn.click()
+        return
+
     page.evaluate(
         """
         const form = document.getElementById('pos-login-form');
-        if (!form) throw new Error('Thiếu form pos-login-form');
+        if (!form) throw new Error('Không tìm thấy nút Đăng nhập');
         const btn = form.querySelector(
             'button.btn-login[type="submit"]:not(#forgot-pass-submit):not(#typing-domain-submit)'
         );
@@ -139,7 +162,7 @@ def login_and_save_cookies(
                 raise RuntimeError("Trang có captcha — không thể đăng nhập tự động.")
 
             _fill_login_form(page, settings.username, settings.password, timeout_ms)
-            _click_login_submit_js(page)
+            _click_login_submit(page, timeout_ms)
 
             try:
                 page.wait_for_url(admin_re, timeout=timeout_ms)
